@@ -41,6 +41,11 @@ The goal was to build a content platform that actively assists creators and prov
 *   **Denormalization for Performance:** In the `Content` model, we store denormalized counts like `viewsCount`, `likesCount`, and `commentsCount`. While the "source of truth" is in the `Like` and `Comment` collections, these stored counts allow for extremely fast reads when fetching lists of content, avoiding expensive database lookups.
 *   **Flexible Role-Based Security:** We implemented a flexible `checkRole` middleware that accepts an array of allowed roles. This is more scalable than creating a separate middleware for every role combination and allows us to easily protect routes for specific user types.
 
+*   **AI Integration Strategy:** The "intelligence" in this CMS is powered by a combination of lightweight, server-side JavaScript libraries, making the system fast and self-contained.
+    *   **For `createContent` and `analyzeContent`:** When a user provides text, we use the **`natural`** library's TF-IDF (Term Frequency-Inverse Document Frequency) algorithm to analyze the content and extract the most statistically relevant keywords. These become the `autoTags`.
+    *   The system then compares these tags against the pre-defined `keywords` in our `Category` model to determine the most suitable `suggestedCategory`.
+    *   Simultaneously, we use **`@mozilla/readability`** and **`jsdom`** to parse the HTML body into clean text to calculate metrics like `wordCount` and `readingTime`. This entire process happens instantly on the server whenever content is created or analyzed.
+
 ## Folder Structure
 
 The project follows a feature-based folder structure, which keeps related code organized and easy to locate.
