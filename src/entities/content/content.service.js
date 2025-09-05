@@ -3,6 +3,7 @@ import Category from '../category/category.model.js';
 import { JSDOM } from 'jsdom';
 import { Readability } from '@mozilla/readability';
 import natural from 'natural';
+import { franc } from 'franc';
 import { cloudinaryUpload } from '../../lib/cloudinaryUpload.js';
 
 const { WordTokenizer, PorterStemmer } = natural;
@@ -24,37 +25,69 @@ const performContentAnalysis = async (textBody) => {
   const readingTime = Math.ceil(wordCount / 200);
   const textContent = article ? article.textContent : '';
 
+  // Language detection (useful for later multi-language models)
+  const detectedLang = textContent ? franc(textContent, { minLength: 10 }) : 'und';
+
   // 2. Auto-Tagging using TF-IDF
   const tfidf = new natural.TfIdf();
   tfidf.addDocument(textContent);
-  const autoTags = tfidf.listTerms(0).slice(0, 5).map(item => item.term);
+  const tfidfTerms = tfidf.listTerms(0);
+  const tagsWithScores = tfidfTerms.slice(0, 15).map((item) => ({ tag: item.term, score: item.tfidf }));
+  const autoTags = tagsWithScores.slice(0, 7).map((t) => t.tag);
+
+  // 2b. Extract frequent bi/tri-grams to improve tag quality
+  const tokens = tokenizer.tokenize(textContent.toLowerCase());
+  const buildNgrams = (arr, n) => arr.slice(0, Math.max(0, arr.length - n + 1)).map((_, i) => arr.slice(i, i + n).join(' '));
+  const bigrams = buildNgrams(tokens, 2);
+  const trigrams = buildNgrams(tokens, 3);
+  const frequency = (list) => list.reduce((acc, key) => { acc[key] = (acc[key] || 0) + 1; return acc; }, {});
+  const topKeys = (freqMap, topN) => Object.entries(freqMap).sort((a, b) => b[1] - a[1]).slice(0, topN).map(([k]) => k);
+  const topBigrams = topKeys(frequency(bigrams), 5);
+  const topTrigrams = topKeys(frequency(trigrams), 3);
+  const mergedAutoTags = Array.from(new Set([...autoTags, ...topBigrams, ...topTrigrams])).slice(0, 10);
 
   // 3. Smart Category Suggestion
   let suggestedCategory = 'Uncategorized';
+  let categoryConfidence = 0;
+  const categoryScores = [];
   const categories = await Category.find({});
   if (categories.length > 0) {
-    let maxMatches = 0;
     const contentTokens = tokenizer.tokenize(textContent.toLowerCase());
-    
     categories.forEach(cat => {
-      let currentMatches = 0;
-      cat.keywords.forEach(keyword => {
-        if (contentTokens.includes(keyword.toLowerCase())) {
-          currentMatches++;
-        }
+      let matchScore = 0;
+      const keywordSet = new Set((cat.keywords || []).map((k) => k.toLowerCase()));
+      contentTokens.forEach((tok) => {
+        if (keywordSet.has(tok)) matchScore += 1;
       });
-      if (currentMatches > maxMatches) {
-        maxMatches = currentMatches;
-        suggestedCategory = cat.name;
+      // bonus if category name appears in content
+      if (cat.name && textContent.toLowerCase().includes(cat.name.toLowerCase())) {
+        matchScore += 2;
       }
+      categoryScores.push({ category: cat.name, score: matchScore });
     });
+    categoryScores.sort((a, b) => b.score - a.score);
+    const top = categoryScores[0];
+    if (top && top.score > 0) {
+      suggestedCategory = top.category;
+      const total = categoryScores.reduce((s, c) => s + c.score, 0) || top.score;
+      categoryConfidence = Math.min(1, top.score / Math.max(1, total));
+    }
   }
 
   return {
     wordCount,
     readingTime,
-    autoTags,
-    suggestedCategory
+    autoTags: mergedAutoTags,
+    suggestedCategory,
+    categoryConfidence,
+    language: detectedLang,
+    ai: {
+      tagsWithScores,
+      categoryScores,
+      source: 'heuristic',
+      usedLLM: false,
+      version: 'v2'
+    }
   };
 };
 
@@ -94,6 +127,9 @@ export const createContentService = async (contentData, authorId, file) => {
     metadata,
     autoTags: analysis.autoTags,
     category: analysis.suggestedCategory,
+    categoryConfidence: analysis.categoryConfidence,
+    detectedLanguage: analysis.language,
+    ai: analysis.ai,
     optimization: {
       wordCount: analysis.wordCount,
       readingTime: analysis.readingTime,
@@ -212,7 +248,16 @@ export const analyzeContentService = async (textBody) => {
       wordCount: 0,
       readingTime: 0,
       autoTags: [],
-      suggestedCategory: 'Uncategorized'
+      suggestedCategory: 'Uncategorized',
+      categoryConfidence: 0,
+      language: 'und',
+      ai: {
+        tagsWithScores: [],
+        categoryScores: [],
+        source: 'heuristic',
+        usedLLM: false,
+        version: 'v2'
+      }
     };
   }
   return performContentAnalysis(textBody);

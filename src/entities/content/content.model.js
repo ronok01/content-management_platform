@@ -15,6 +15,31 @@ const contentSchema = new mongoose.Schema(
     category: String,
     tags: [String],
     autoTags: [String],
+    categoryConfidence: { type: Number, default: 0 },
+    detectedLanguage: { type: String, default: 'unknown' },
+
+    // AI metadata for transparency and future learning
+    ai: {
+      tagsWithScores: [
+        {
+          tag: String,
+          score: Number,
+        },
+      ],
+      categoryScores: [
+        {
+          category: String,
+          score: Number,
+        },
+      ],
+      source: {
+        type: String,
+        enum: ['heuristic', 'llm', 'hybrid'],
+        default: 'heuristic',
+      },
+      usedLLM: { type: Boolean, default: false },
+      version: { type: String, default: 'v2' },
+    },
 
     // Content Optimization (Stored for performance)
     optimization: {
